@@ -1,35 +1,674 @@
 <!doctype html>
 <html lang="fr">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Équipe Gwin</title>
-  <style>
-    :root {
-      --fond: #111111;
-      --texte: #f5f5f5;
-    }
-    html, body {
-      margin: 0;
-      height: 100%;
-      background: var(--fond);
-      color: var(--texte);
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    }
-    body {
-      display: grid;
-      place-items: center;
-      padding: 0 16px;
-    }
-    h1 {
-      margin: 0;
-      font-size: clamp(2.5rem, 12vw, 6rem);
-      font-weight: 800;
-      text-align: center;
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Zem Rush</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1C1A17; overflow: hidden; overscroll-behavior: none; }
+  body {
+    touch-action: none; -webkit-tap-highlight-color: transparent;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; outline: none; }
+  #zone-sure {
+    position: fixed; visibility: hidden; pointer-events: none;
+    padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  }
+</style>
 </head>
 <body>
-  <h1>Équipe Gwin</h1>
+<canvas id="jeu" aria-label="Zem Rush, course en zémidjan dans les rues de Lomé"></canvas>
+<div id="zone-sure"></div>
+<script>
+'use strict';
+
+// Distances et vitesses en largeurs de voie : même difficulté sur téléphone et sur grand écran.
+const CONFIG = { voies: 3, affichage: { hauteurEnVoies: 7.2, margeCotes: 1.3 },
+  vitesse: { depart: 5, acceleration: 0.075, max: 12 }, difficulte: {
+    dureeNiveau: 15, ecartDepart: 3.6, ecartMin: 2.25, reductionEcart: 0.022, ecartAleatoire: 0.6,
+    chanceDoubleDepart: 0.25, chanceDoubleParNiveau: 0.1, chanceDoubleMax: 0.75,
+    chanceBouchon: 0.26, chanceTrou: 0.4, chancePietons: 0.16, chancePiece: 0.45, pietonsApres: 6,
+    // Ayimolou plus fréquent quand on a perdu une vie : il aide sans devenir obligatoire
+    chanceAyimolou: 0.05, chanceAyimolouBlesse: 0.16, premierAyimolou: 3 },
+  joueur: { vies: 3, dureeChangement: 0.12, invincibilite: 1.6, positionBas: 1.7, largeur: 0.4, hauteur: 0.8, delaiKlaxon: 0.45 },
+  score: { parVoie: 10, esquive: 50, piece: 100, ayimolouPlein: 300, fenetreEsquive: 0.45, dureeCombo: 3, palier: 1000 },
+  effets: { tremblement: 16, flash: 0.6, particulesChoc: 36, inclinaison: 0.38, confettis: 90, maxParticules: 420 },
+  // Cloche gankogui de l'agbadza ewe : le rythme qu'on entend dans les fêtes du sud du Togo
+  musique: { bpmDepart: 104, bpmParVitesse: 5, cloche: [1,0,1,0,1,1,0,1,0,1,0,1], caisse: [1,0,0,0,0,0,1,0,0,1,0,0], tambour: [0,0,0,1,0,0,0,0,1,0,0,1] },
+  decor: { periode: 2.4, colonne: 1.6 }, quartiers: [ { nom: 'Boulevard de la Marina', cotes: ['ocean', 'tole'] },
+    { nom: 'Grand Marché', cotes: ['marche', 'marche'] }, { nom: "Place de l'Indépendance", cotes: ['monument', 'tole'] },
+    { nom: 'Boulevard du 13 Janvier', cotes: ['immeubles', 'immeubles'] },
+    { nom: 'Rond-point Déckon', cotes: ['marche', 'immeubles'] } ], textes: {
+    paliers: ['Ça roule !', 'Zem de champion !', 'Le goudron est à toi !', 'Lomé applaudit !', 'Personne ne te rattrape !'],
+    choc: 'Yako !', pieton: 'Pardon !', record: 'Nouveau record !', klaxon: 'Pouet !' }, pasTemps: 1 / 120, couleurs: {
+    fond: '#1C1A17', route: '#34312D', marquage: '#F2EDE4', terre: '#9A4A2B', sol: '#7A3B22',
+    toleGrise: '#5E5B55', toleRouille: '#7E3A26', beton: '#8E8A83', toit: '#3A3733', cuve: '#151515',
+    sable: '#E3C58C', ocean: '#16739A', vague: '#BFE6F2', pave: '#CDC4B2',
+    jaune: '#FFC52E', vert: '#22B263', rouge: '#FF4B3A',
+    texte: '#FFFFFF', ombre: '#121110', vitre: '#1B232C', trou: '#141210', bordTrou: '#5A544C',
+    riz: '#EEE4CC', haricot: '#7B3326', sauce: '#D8401C', piment: '#1D1310', poisson: '#B08A55', wagashi: '#F6F0E2', bordAssiette: '#2C8A57',
+    peau: '#4A2E1C', bassine: '#BDB7AC', orange: '#F28C1B', piece: '#F6C238', bordPiece: '#B9861A', panneau: '#1E7A47',
+    voitures: ['#E9E4D8', '#C23B2E', '#2F8F5B', '#D8A31C', '#5B5E66'],
+    wax: ['#E8432E', '#F6B417', '#1E9E5A', '#2456A6', '#8E2A8C', '#F2EDE4'] } }; const C = CONFIG.couleurs;
+const POLICE = 'system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const SOLS = { tole: C.fond, ocean: C.ocean, marche: C.sol, monument: C.pave, immeubles: C.toit };
+const canvas = document.getElementById('jeu'); const ctx = canvas.getContext('2d');
+const zoneSure = document.getElementById('zone-sure');
+const ecran = { W: 1, H: 1, u: 1, routeX: 0, hMonde: 1, haut: 0, bas: 0, gauche: 0, droite: 0, clavier: false };
+const boutons = { pause: {}, son: {}, rejouer: {} };
+
+let etat = 'titre';
+let jeu = nouvellePartie();
+let meilleurScore = 0;
+let horloge = 0;
+
+// ---------- Utilitaires ----------
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v)); const hasard = (a, b) => a + Math.random() * (b - a);
+const choisir = t => t[Math.floor(Math.random() * t.length)];
+const dans = (b, x, y) => x >= b.x - 8 && x <= b.x + b.w + 8 && y >= b.y - 8 && y <= b.y + b.h + 8;
+// Pseudo-hasard stable : le décor doit rester identique d'une image à l'autre
+function alea(k) { const s = Math.sin(k * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); }
+
+function cheminArrondi(x, y, w, h, r) { r = Math.min(r, w / 2, h / 2); ctx.beginPath(); ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function rectArrondi(x, y, w, h, r, couleur) { cheminArrondi(x, y, w, h, r); ctx.fillStyle = couleur; ctx.fill(); }
+function disque(x, y, r, couleur) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = couleur; ctx.fill(); }
+function ovale(x, y, rx, ry, couleur) { ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2); ctx.fillStyle = couleur; ctx.fill(); }
+function trait(x1, y1, x2, y2) { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
+
+function texte(t, x, y, taille, couleur, poids, contour) { ctx.font = `${poids} ${taille}px ${POLICE}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  if (contour) { ctx.lineJoin = 'round'; ctx.lineWidth = contour; ctx.strokeStyle = C.ombre; ctx.strokeText(t, x, y); }
+  ctx.fillStyle = couleur; ctx.fillText(t, x, y); }
+function tailleAjustee(t, max, largeurMax, poids) { ctx.font = `${poids} ${max}px ${POLICE}`;
+  const l = ctx.measureText(t).width; return l > largeurMax ? max * largeurMax / l : max; }
+
+// ---------- Écran ----------
+function redimensionner() {
+  const W = window.innerWidth, H = window.innerHeight, dpr = Math.min(window.devicePixelRatio || 1, 3);
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const cs = getComputedStyle(zoneSure);
+  ecran.haut = parseFloat(cs.paddingTop) || 0; ecran.bas = parseFloat(cs.paddingBottom) || 0;
+  ecran.gauche = parseFloat(cs.paddingLeft) || 0; ecran.droite = parseFloat(cs.paddingRight) || 0; ecran.W = W; ecran.H = H;
+  ecran.clavier = window.matchMedia('(pointer: fine)').matches; const n = CONFIG.voies;
+  ecran.u = Math.min((W - ecran.gauche - ecran.droite) / (n + CONFIG.affichage.margeCotes), H / CONFIG.affichage.hauteurEnVoies);
+  ecran.routeX = (W - n * ecran.u) / 2; ecran.hMonde = H / ecran.u; const tb = 52, m = 12;
+  boutons.pause = { x: ecran.gauche + m, y: ecran.haut + m, w: tb, h: tb };
+  boutons.son = { x: W - ecran.droite - m - tb, y: ecran.haut + m, w: tb, h: tb };
+  const bw = Math.min(W * 0.84, 440), bh = clamp(H * 0.1, 72, 96);
+  boutons.rejouer = { x: (W - bw) / 2, y: H * 0.63, w: bw, h: bh }; }
+
+// ---------- Son ----------
+const son = { ctx: null, maitre: null, coupe: false, moteur: null, moteurGain: null, tamponBruit: null, prochainPas: 0, pas: 0 };
+
+function initialiserSon() { if (son.ctx) { if (son.ctx.state === 'suspended') son.ctx.resume(); return; }
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return; // navigateur sans Web Audio : le jeu reste jouable en silence
+  son.ctx = new Ctx(); son.maitre = son.ctx.createGain(); son.maitre.gain.value = son.coupe ? 0 : 0.6;
+  son.maitre.connect(son.ctx.destination); const n = son.ctx.sampleRate; son.tamponBruit = son.ctx.createBuffer(1, n, n);
+  const d = son.tamponBruit.getChannelData(0); for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+  // Le moteur suit la vitesse pour que l'accélération s'entende
+  const o = son.ctx.createOscillator(), f = son.ctx.createBiquadFilter(), g = son.ctx.createGain();
+  o.type = 'sawtooth'; o.frequency.value = 60; f.type = 'lowpass'; f.frequency.value = 420; g.gain.value = 0;
+  o.connect(f); f.connect(g); g.connect(son.maitre); o.start(); son.moteur = o; son.moteurGain = g; }
+
+function bip(freq, duree, type, vol, freqFin, decal) { if (!son.ctx) return; const t = son.ctx.currentTime + (decal || 0);
+  const o = son.ctx.createOscillator(), g = son.ctx.createGain(); o.type = type; o.frequency.setValueAtTime(freq, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(20, freqFin || freq), t + duree); g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + duree); o.connect(g); g.connect(son.maitre);
+  o.start(t); o.stop(t + duree + 0.02); }
+
+function bruit(duree, vol, freq, decal, filtre) { if (!son.ctx) return; const t = son.ctx.currentTime + (decal || 0);
+  const s = son.ctx.createBufferSource(), f = son.ctx.createBiquadFilter(), g = son.ctx.createGain();
+  s.buffer = son.tamponBruit; f.type = filtre || 'lowpass'; f.frequency.value = freq; g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + duree); s.connect(f); f.connect(g); g.connect(son.maitre);
+  s.start(t); s.stop(t + duree); }
+
+const sons = { depart: () => { bip(392, 0.1, 'square', 0.12); bip(587, 0.18, 'square', 0.12, 587, 0.1); },
+  changement: () => { bruit(0.09, 0.18, 2200); bip(420, 0.07, 'triangle', 0.08, 760); },
+  choc: () => { bruit(0.4, 0.55, 700); bip(170, 0.45, 'square', 0.25, 40); },
+  pieton: () => { bip(620, 0.18, 'triangle', 0.2, 300); bruit(0.15, 0.2, 1500); },
+  esquive: () => { bip(660, 0.07, 'square', 0.1); bip(990, 0.12, 'square', 0.1, 990, 0.07); },
+  piece: () => { bip(1318, 0.07, 'square', 0.08); bip(1760, 0.16, 'square', 0.08, 1760, 0.06); },
+  ayimolou: () => { [392, 523, 659, 784, 1047].forEach((f, i) => bip(f, 0.22, 'sine', 0.22, f, i * 0.07)); bip(1568, 0.4, 'triangle', 0.08, 1568, 0.35); },
+  niveau: () => { [523, 659, 784, 1047].forEach((f, i) => bip(f, 0.12, 'square', 0.1, f, i * 0.08)); },
+  bouchon: () => { bip(300, 0.16, 'sawtooth', 0.05); bip(300, 0.22, 'sawtooth', 0.05, 290, 0.2); },
+  klaxon: () => { bip(520, 0.1, 'square', 0.12); bip(520, 0.16, 'square', 0.12, 510, 0.13); },
+  fete: () => { [523, 659, 784, 1047, 1319].forEach((f, i) => bip(f, 0.14, 'square', 0.09, f, i * 0.07)); bruit(0.9, 0.18, 2500, 0.05, 'bandpass'); },
+  fin: () => { bip(440, 0.7, 'sawtooth', 0.18, 70); bruit(0.6, 0.4, 500); } };
+
+function basculerSon() { son.coupe = !son.coupe;
+  if (son.ctx) son.maitre.gain.setTargetAtTime(son.coupe ? 0 : 0.6, son.ctx.currentTime, 0.02); }
+
+function majAudio() { if (!son.ctx) return; const actif = etat === 'jeu', t = son.ctx.currentTime;
+  son.moteurGain.gain.setTargetAtTime(actif ? 0.045 : 0, t, 0.1); if (!actif) { son.prochainPas = 0; return; }
+  son.moteur.frequency.setTargetAtTime(55 + vitesseActuelle() * 8, t, 0.2);
+  // Programmation en avance : la musique reste régulière même si une image est en retard
+  const m = CONFIG.musique;
+  const pas = 60 / (m.bpmDepart + (vitesseActuelle() - CONFIG.vitesse.depart) * m.bpmParVitesse) / 3;
+  if (son.prochainPas < t) son.prochainPas = t + 0.05; while (son.prochainPas < t + 0.15) {
+    const i = son.pas % 12, dc = son.prochainPas - t;
+    if (m.cloche[i]) bip(i === 0 ? 1480 : 1180, 0.07, 'square', 0.035, i === 0 ? 1480 : 1180, dc);
+    if (m.caisse[i]) bip(140, 0.2, 'sine', 0.32, 45, dc); if (m.tambour[i]) bip(240, 0.12, 'triangle', 0.12, 180, dc);
+    bruit(0.04, i % 3 === 0 ? 0.05 : 0.025, 7000, dc, 'highpass'); son.pas++; son.prochainPas += pas; } }
+
+// ---------- État de partie ----------
+function nouvellePartie() { const milieu = Math.floor(CONFIG.voies / 2); return {
+    temps: 0, bonusTemps: 0, defilement: 0, score: 0, vies: CONFIG.joueur.vies, niveau: 1,
+    voieCible: milieu, xJoueur: milieu + 0.5, inclinaison: 0, invincible: 0, obstacles: [], particules: [],
+    distance: -1.5, prochainEcart: CONFIG.difficulte.ecartDepart, hauteurRangee: 0,
+    libresPrec: Array.from({ length: CONFIG.voies }, (_, i) => i),
+    voieQuittee: -1, tempsChangement: -10, dernierKlaxon: -10, fumee: 0,
+    combo: 0, dernierBonus: -10, pieces: 0, esquives: 0, ayimolous: 0, premierAyimolou: false, animVie: 0, vieGagnee: -1, prochainPalier: CONFIG.score.palier, recordAnnonce: false,
+    zones: [{ w: -Infinity, idx: 0 }], portiques: [{ w: 1, nom: CONFIG.quartiers[0].nom }],
+    secousse: 0, flash: 0, flashVert: 0, banniere: null, tempsFin: 0, nouveauRecord: false }; }
+
+function demarrer() { jeu = nouvellePartie(); etat = 'jeu';
+  jeu.banniere = { texte: CONFIG.quartiers[0].nom, sous: 'Woézon à Lomé !', t: 2, couleur: C.texte }; sons.depart(); }
+function mettrePause() { if (etat === 'jeu') etat = 'pause'; }
+function reprendre() { if (etat === 'pause') etat = 'jeu'; }
+
+function tempsEffectif() { return jeu.temps + jeu.bonusTemps; }
+function vitesseActuelle() { const v = CONFIG.vitesse; return Math.min(v.max, v.depart + v.acceleration * tempsEffectif()); }
+function niveauActuel() { return 1 + Math.floor(tempsEffectif() / CONFIG.difficulte.dureeNiveau); }
+function ecartActuel() { const d = CONFIG.difficulte;
+  return Math.max(d.ecartMin, d.ecartDepart - d.reductionEcart * tempsEffectif()) + Math.random() * d.ecartAleatoire; }
+function yJoueur() { return (ecran.H - ecran.bas) / ecran.u - CONFIG.joueur.positionBas; }
+function quartierActuel() { return CONFIG.quartiers[(jeu.niveau - 1) % CONFIG.quartiers.length]; }
+function zoneA(w) { for (let i = jeu.zones.length - 1; i >= 0; i--) if (w >= jeu.zones[i].w) return jeu.zones[i].idx; return 0; }
+
+function niveauSuivant() { const D = CONFIG.difficulte.dureeNiveau, te = tempsEffectif();
+  jeu.bonusTemps += (Math.floor(te / D) + 1) * D - te; }
+
+function changerQuartier() {
+  // Le nouveau quartier commence à la prochaine limite de décor, là où passe le portique
+  const P = CONFIG.decor.periode, w = Math.ceil(jeu.defilement / P + 1) * P, q = quartierActuel();
+  jeu.zones.push({ w, idx: (jeu.niveau - 1) % CONFIG.quartiers.length }); jeu.portiques.push({ w, nom: q.nom });
+  jeu.banniere = { texte: q.nom, sous: 'Woézon ! Niveau ' + jeu.niveau, t: 2.2, couleur: C.texte }; sons.niveau(); }
+
+function klaxonner() { if (etat !== 'jeu' || jeu.temps - jeu.dernierKlaxon < CONFIG.joueur.delaiKlaxon) return;
+  jeu.dernierKlaxon = jeu.temps; sons.klaxon();
+  // Les passants pressent le pas : le klaxon a un vrai effet sur la route
+  for (const o of jeu.obstacles) if (o.type === 'pieton' && !o.presse) { o.presse = true; o.vx *= 2.6; }
+  const p = versEcran(jeu.xJoueur, yJoueur() - 0.5);
+  jeu.particules.push({ forme: 'onde', x: p.x, y: p.y, vx: 0, vy: 0, vie: 0.5, vieMax: 0.5, couleur: C.jaune, taille: 10 });
+  jeu.particules.push({ forme: 'texte', texte: CONFIG.textes.klaxon, x: p.x, y: p.y - 30, vx: 0, vy: -60, vie: 0.6, vieMax: 0.6, couleur: C.jaune, taille: 0 });
+}
+
+// ---------- Règles du jeu ----------
+// Chaque règle est isolée pour pouvoir en ajouter une nouvelle sans toucher aux autres.
+
+function creerObstacle(voie) { const d = CONFIG.difficulte, r = Math.random(); if (r < d.chanceBouchon) {
+    const nb = Math.min(4, 2 + Math.floor(Math.random() * (1 + jeu.niveau / 2))); for (let i = 0; i < nb; i++) {
+      jeu.obstacles.push({ type: 'voiture', voie, w: 0.62, h: 1.15, y: -1.35 - i * 1.3, couleur: choisir(C.voitures), bouchon: true });
+    } sons.bouchon(); return nb * 1.3; } if (r < d.chanceBouchon + d.chanceTrou) {
+    const w = hasard(0.55, 0.78), h = hasard(0.45, 0.65);
+    jeu.obstacles.push({ type: 'trou', voie, w, h, y: -h - 0.2, forme: Array.from({ length: 11 }, () => hasard(0.78, 1.08)) });
+    return h; }
+  jeu.obstacles.push({ type: 'voiture', voie, w: 0.62, h: 1.15, y: -1.35, couleur: choisir(C.voitures), bouchon: false });
+  return 1.15; }
+
+function genererPietons() { const n = CONFIG.voies, nb = Math.random() < 0.4 ? 2 : 1; for (let i = 0; i < nb; i++) {
+    const gauche = Math.random() < 0.5;
+    jeu.obstacles.push({ type: 'pieton', x: gauche ? -0.3 : n + 0.3, vx: (gauche ? 1 : -1) * hasard(0.9, 1.4),
+      y: -0.6 - i * 1.1, h: 0.4, couleur: choisir(C.wax), bassine: Math.random() < 0.5, phase: Math.random() * 6 }); }
+  jeu.libresPrec = Array.from({ length: n }, (_, i) => i); jeu.hauteurRangee = nb * 1.1; }
+
+function genererRangee() { const n = CONFIG.voies, d = CONFIG.difficulte;
+  if (tempsEffectif() > d.pietonsApres && Math.random() < d.chancePietons) { genererPietons(); return; }
+  const pDouble = Math.min(d.chanceDoubleMax, d.chanceDoubleDepart + (jeu.niveau - 1) * d.chanceDoubleParNiveau);
+  // La voie libre reste voisine de la précédente : une rangée doit toujours être franchissable
+  const candidates = []; for (let v = 0; v < n; v++) if (jeu.libresPrec.some(l => Math.abs(l - v) <= 1)) candidates.push(v);
+  const libre = choisir(candidates), autres = []; for (let v = 0; v < n; v++) if (v !== libre) autres.push(v);
+  const bloquees = Math.random() < pDouble ? autres : [choisir(autres)]; let hauteur = 0;
+  bloquees.forEach(v => { hauteur = Math.max(hauteur, creerObstacle(v)); }); jeu.libresPrec = [];
+  for (let v = 0; v < n; v++) if (!bloquees.includes(v)) jeu.libresPrec.push(v);
+  // La pièce attend dans une voie libre : elle récompense la bonne trajectoire
+  const libresBonus = jeu.libresPrec.slice(); if (Math.random() < d.chancePiece) { const v = choisir(libresBonus);
+    libresBonus.splice(libresBonus.indexOf(v), 1); jeu.obstacles.push({ type: 'piece', voie: v, w: 0.44, h: 0.44, y: -0.8 });
+  } if (libresBonus.length && doitApparaitreAyimolou()) { jeu.premierAyimolou = true;
+    jeu.obstacles.push({ type: 'ayimolou', voie: choisir(libresBonus), w: 0.66, h: 0.66, y: -0.95 }); }
+  jeu.hauteurRangee = hauteur; }
+
+function doitApparaitreAyimolou() { const d = CONFIG.difficulte;
+  if (jeu.obstacles.some(o => o.type === 'ayimolou' && !o.touche)) return false;
+  // Le premier arrive tôt pour que le public découvre le bonus dès le début
+  if (!jeu.premierAyimolou) return jeu.temps >= d.premierAyimolou;
+  return Math.random() < (jeu.vies < CONFIG.joueur.vies ? d.chanceAyimolouBlesse : d.chanceAyimolou); }
+
+function mangerAyimolou(o) { o.touche = true; // ne peut être ramassé qu'une fois
+  jeu.ayimolous++; const p = versEcran(o.voie + 0.5, o.y + o.h / 2);
+  emettre(p.x, p.y, 22, [C.riz, C.haricot, C.sauce, C.vert], 300, 7);
+  jeu.particules.push({ forme: 'onde', x: p.x, y: p.y, vx: 0, vy: 0, vie: 0.6, vieMax: 0.6, couleur: C.vert, taille: 12 });
+  let message = '+1 VIE'; if (jeu.vies < CONFIG.joueur.vies) { jeu.vies = Math.min(CONFIG.joueur.vies, jeu.vies + 1);
+    jeu.vieGagnee = jeu.vies - 1; jeu.animVie = 1; } else { jeu.score += CONFIG.score.ayimolouPlein;
+    message = 'Vies au max +' + CONFIG.score.ayimolouPlein; } jeu.flashVert = 0.5;
+  jeu.particules.push({ forme: 'texte', texte: message, x: p.x, y: p.y - ecran.u * 0.7, vx: 0, vy: -70, vie: 1.3, vieMax: 1.3, couleur: C.vert, taille: 0 });
+  jeu.banniere = { texte: 'Ayimolou !', sous: message, t: 1.4, couleur: C.vert }; sons.ayimolou(); }
+
+function boiteJoueur() { const j = CONFIG.joueur;
+  return { x: jeu.xJoueur - j.largeur / 2, y: yJoueur() - j.hauteur / 2, w: j.largeur, h: j.hauteur }; }
+
+function boiteObstacle(o) { if (o.type === 'pieton') return { x: o.x - 0.18, y: o.y + 0.02, w: 0.36, h: 0.36 };
+  if (o.type === 'ayimolou' || o.type === 'piece') return { x: o.voie + 0.5 - o.w / 2, y: o.y, w: o.w, h: o.h };
+  // Un trou se frôle plus facilement qu'une voiture : marge plus grande
+  const m = o.type === 'trou' ? 0.18 : 0.06;
+  return { x: o.voie + 0.5 - o.w / 2 + m * o.w, y: o.y + m * o.h, w: o.w * (1 - 2 * m), h: o.h * (1 - 2 * m) }; }
+
+function testerCollisions() { const b = boiteJoueur(); for (const o of jeu.obstacles) { if (o.touche) continue;
+    const c = boiteObstacle(o); if (!(b.x < c.x + c.w && b.x + b.w > c.x && b.y < c.y + c.h && b.y + b.h > c.y)) continue;
+    if (o.type === 'piece') { ramasser(o); continue; } if (o.type === 'ayimolou') { mangerAyimolou(o); continue; }
+    if (jeu.invincible > 0) continue; choc(o); return; } }
+
+function bonus(base, libelle, couleur) {
+  jeu.combo = jeu.temps - jeu.dernierBonus <= CONFIG.score.dureeCombo ? jeu.combo + 1 : 1; jeu.dernierBonus = jeu.temps;
+  const pts = base * jeu.combo, p = versEcran(jeu.xJoueur, yJoueur() - 0.8); jeu.score += pts;
+  jeu.particules.push({ forme: 'texte', texte: libelle + (jeu.combo > 1 ? ' x' + jeu.combo : '') + ' +' + pts,
+    x: p.x, y: p.y, vx: 0, vy: -80, vie: 1, vieMax: 1, couleur, taille: 0 });
+  if (jeu.combo >= 3) jeu.secousse = Math.max(jeu.secousse, 5); }
+
+function ramasser(o) { o.touche = true; jeu.pieces++; const p = versEcran(o.voie + 0.5, o.y + o.h / 2);
+  emettre(p.x, p.y, 14, [C.piece, C.texte], 260, 6);
+  jeu.particules.push({ forme: 'onde', x: p.x, y: p.y, vx: 0, vy: 0, vie: 0.4, vieMax: 0.4, couleur: C.piece, taille: 8 });
+  bonus(CONFIG.score.piece, '100 F', C.piece); sons.piece(); }
+
+function detecterEsquives() { const haut = boiteJoueur().y; for (const o of jeu.obstacles) {
+    if (o.arrive || o.voie === undefined || o.type === 'piece' || o.type === 'ayimolou' || o.y + o.h < haut) continue;
+    o.arrive = true;
+    if (!o.touche && o.voie === jeu.voieQuittee && jeu.temps - jeu.tempsChangement <= CONFIG.score.fenetreEsquive) {
+      jeu.voieQuittee = -1; jeu.esquives++; const p = versEcran(jeu.xJoueur, haut);
+      emettre(p.x, p.y + 30, 10, [C.vert, C.texte], 220, 5); bonus(CONFIG.score.esquive, 'Esquive', C.vert); sons.esquive();
+    } } }
+
+function majScore(dt, v) { jeu.score += v * dt * CONFIG.score.parVoie; }
+
+function verifierPaliers() { if (jeu.score >= jeu.prochainPalier) { const t = CONFIG.textes.paliers;
+    celebrer(String(jeu.prochainPalier), t[(jeu.prochainPalier / CONFIG.score.palier - 1) % t.length]);
+    jeu.prochainPalier += CONFIG.score.palier; } if (!jeu.recordAnnonce && meilleurScore > 0 && jeu.score > meilleurScore) {
+    jeu.recordAnnonce = true; celebrer(CONFIG.textes.record, 'Continue comme ça'); } }
+
+function celebrer(titre, sous) { jeu.banniere = { texte: titre, sous, t: 1.8, couleur: C.jaune };
+  confettis(CONFIG.effets.confettis); sons.fete(); }
+
+function estPerdu() { return jeu.vies <= 0; }
+
+function choc(o) { o.touche = true; jeu.vies -= 1; jeu.combo = 0; jeu.invincible = CONFIG.joueur.invincibilite;
+  jeu.secousse = CONFIG.effets.tremblement; jeu.flash = CONFIG.effets.flash; const p = versEcran(jeu.xJoueur, yJoueur());
+  const pieton = o.type === 'pieton'; if (pieton) o.vx = Math.sign(o.x - jeu.xJoueur || 1) * 5; // le passant saute de côté
+  emettre(p.x, p.y, CONFIG.effets.particulesChoc, [C.rouge, C.jaune, o.couleur || C.bordTrou, C.texte], 520, 9);
+  jeu.particules.push({ forme: 'texte', texte: pieton ? CONFIG.textes.pieton : CONFIG.textes.choc,
+    x: p.x, y: p.y - ecran.u * 0.9, vx: 0, vy: -50, vie: 1.1, vieMax: 1.1, couleur: C.rouge, taille: 0 });
+  if (pieton) sons.pieton(); else sons.choc(); if (navigator.vibrate) navigator.vibrate(140); }
+
+function finPartie() { etat = 'fin'; jeu.tempsFin = 0;
+  if (jeu.score > meilleurScore) { meilleurScore = jeu.score; jeu.nouveauRecord = true; }
+  const p = versEcran(jeu.xJoueur, yJoueur()); emettre(p.x, p.y, 60, [C.rouge, C.jaune, C.vert, C.texte], 700, 11);
+  jeu.secousse = CONFIG.effets.tremblement * 1.5; sons.fin();
+  if (jeu.nouveauRecord) { confettis(CONFIG.effets.confettis * 1.5); sons.fete(); } }
+
+// ---------- Particules ----------
+function versEcran(xVoie, yVoie) { return { x: ecran.routeX + xVoie * ecran.u, y: yVoie * ecran.u }; }
+
+function emettre(x, y, nb, couleurs, force, taille) { for (let i = 0; i < nb; i++) {
+    const a = Math.random() * Math.PI * 2, v = force * hasard(0.25, 1), vie = hasard(0.4, 0.9);
+    jeu.particules.push({ forme: 'carre', x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, vie, vieMax: vie, couleur: choisir(couleurs), taille: taille * hasard(0.5, 1.2) });
+  } }
+
+function confettis(nb) { const cols = [C.vert, C.jaune, C.rouge, C.texte]; for (let i = 0; i < nb; i++) {
+    jeu.particules.push({ forme: 'confetti', x: hasard(0, ecran.W), y: hasard(-60, 0), vx: hasard(-90, 90), vy: hasard(40, 220),
+      vie: 2.6, vieMax: 2.6, couleur: choisir(cols), taille: hasard(7, 12), rot: Math.random() * 6 }); } }
+
+function majParticules(dt) { for (const p of jeu.particules) { p.x += p.vx * dt; p.y += p.vy * dt; p.vie -= dt;
+    if (p.forme === 'confetti') { p.vy += 240 * dt; p.vx *= Math.exp(-1.5 * dt); p.rot += dt * 9; }
+    else if (p.forme !== 'texte') { p.vx *= Math.exp(-3 * dt); p.vy *= Math.exp(-3 * dt); }
+    if (p.forme === 'fumee') p.taille += dt * 22; if (p.forme === 'onde') p.taille += dt * 260; }
+  jeu.particules = jeu.particules.filter(p => p.vie > 0);
+  if (jeu.particules.length > CONFIG.effets.maxParticules) jeu.particules.splice(0, jeu.particules.length - CONFIG.effets.maxParticules);
+}
+
+// ---------- Entrées ----------
+function changerVoie(dir) { const cible = clamp(jeu.voieCible + dir, 0, CONFIG.voies - 1);
+  if (cible === jeu.voieCible) return; jeu.voieQuittee = jeu.voieCible; jeu.tempsChangement = jeu.temps;
+  jeu.voieCible = cible; jeu.inclinaison = dir * CONFIG.effets.inclinaison;
+  const p = versEcran(jeu.xJoueur, yJoueur() + 0.4); emettre(p.x, p.y, 8, [C.terre, '#C7744F'], 160, 7); sons.changement(); }
+
+function surTouche(e) { initialiserSon(); const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(k)) e.preventDefault();
+  const gauche = k === 'ArrowLeft' || k === 'q' || k === 'a', droite = k === 'ArrowRight' || k === 'd';
+  if (e.repeat && !gauche && !droite) return; if (k === 'r') { demarrer(); return; }
+  if (k === 'm') { basculerSon(); return; } if (etat === 'titre') {
+    if (k === ' ' || k === 'Enter' || gauche || droite) demarrer(); } else if (etat === 'jeu') { if (gauche) changerVoie(-1);
+    else if (droite) changerVoie(1); else if (k === 'ArrowUp' || k === 'k' || k === 'z' || k === 'w') klaxonner();
+    else if (k === ' ' || k === 'Escape' || k === 'p') mettrePause(); else if (k === 'n') niveauSuivant();
+  } else if (etat === 'pause') { if (k === ' ' || k === 'Enter' || k === 'Escape' || k === 'p') reprendre();
+  } else if (etat === 'fin' && (k === ' ' || k === 'Enter') && jeu.tempsFin > 0.35) { demarrer(); } }
+
+function surPointeur(e) { e.preventDefault(); initialiserSon(); const x = e.clientX, y = e.clientY;
+  if (dans(boutons.son, x, y)) { basculerSon(); return; }
+  if (etat === 'jeu' && dans(boutons.pause, x, y)) { mettrePause(); return; } if (etat === 'titre') demarrer();
+  else if (etat === 'pause') reprendre(); else if (etat === 'jeu') changerVoie(x < ecran.W / 2 ? -1 : 1);
+  // Délai court : un doigt encore posé au moment du choc ne relance pas la partie par erreur
+  else if (etat === 'fin' && jeu.tempsFin > 0.35 && dans(boutons.rejouer, x, y)) demarrer(); }
+
+// ---------- Mise à jour ----------
+function majJeu(dt) { jeu.temps += dt; const v = vitesseActuelle(); jeu.defilement += v * dt; majScore(dt, v);
+  const niv = niveauActuel(); if (niv > jeu.niveau) { jeu.niveau = niv; changerQuartier(); }
+
+  const ecart = jeu.voieCible + 0.5 - jeu.xJoueur;
+  jeu.xJoueur += Math.sign(ecart) * Math.min(Math.abs(ecart), dt / CONFIG.joueur.dureeChangement);
+  jeu.inclinaison *= Math.exp(-7 * dt); jeu.invincible = Math.max(0, jeu.invincible - dt); jeu.fumee -= dt;
+  if (jeu.fumee <= 0) { jeu.fumee = 0.07; const p = versEcran(jeu.xJoueur + 0.08, yJoueur() + 0.5);
+    jeu.particules.push({ forme: 'fumee', x: p.x, y: p.y, vx: hasard(-10, 10), vy: v * ecran.u * 0.5, vie: 0.45, vieMax: 0.45, couleur: '#9A968F', taille: 4 });
+  }
+
+  jeu.distance += v * dt; if (jeu.distance >= jeu.prochainEcart + jeu.hauteurRangee) { genererRangee(); jeu.distance = 0;
+    jeu.prochainEcart = ecartActuel(); } for (const o of jeu.obstacles) { o.y += v * dt;
+    if (o.type === 'pieton') { o.x += o.vx * dt; o.phase += dt * 10; } } testerCollisions(); detecterEsquives();
+  jeu.obstacles = jeu.obstacles.filter(o => o.y < ecran.hMonde + 0.5 && !(o.type === 'pieton' && (o.x < -1.5 || o.x > CONFIG.voies + 1.5)));
+  jeu.portiques = jeu.portiques.filter(p => jeu.defilement - p.w < ecran.hMonde + 2); verifierPaliers();
+  if (jeu.banniere) { jeu.banniere.t -= dt; if (jeu.banniere.t <= 0) jeu.banniere = null; } if (estPerdu()) finPartie(); }
+
+function mettreAJour(dt) { if (etat === 'pause') return; horloge += dt; if (etat === 'titre') jeu.defilement += 2.5 * dt;
+  else if (etat === 'jeu') majJeu(dt); else if (etat === 'fin') jeu.tempsFin += dt; majParticules(dt);
+  jeu.secousse *= Math.exp(-6 * dt); jeu.flash = Math.max(0, jeu.flash - dt * 1.6);
+  jeu.flashVert = Math.max(0, jeu.flashVert - dt * 1.4); jeu.animVie = Math.max(0, jeu.animVie - dt * 1.2); }
+
+// ---------- Dessin du décor de Lomé ----------
+function dessinerPalmier(x, y, u) { ctx.save(); ctx.translate(x, y); disque(0.08 * u, 0.1 * u, 0.36 * u, 'rgba(0,0,0,0.3)');
+  for (let i = 0; i < 7; i++) { ctx.rotate(Math.PI * 2 / 7);
+    ctx.beginPath(); ctx.ellipse(0.2 * u, 0, 0.2 * u, 0.07 * u, 0, 0, Math.PI * 2);
+    ctx.fillStyle = i % 2 ? '#1E8A4C' : C.vert; ctx.fill(); } disque(0, 0, 0.06 * u, '#6B4A2A'); ctx.restore(); }
+
+function dessinerPersonne(x, y, s, couleur, bassine, phase) { ctx.save(); ctx.translate(x, y); ctx.scale(s, s);
+  ovale(0.05, 0.05, 0.22, 0.13, 'rgba(0,0,0,0.3)'); const b = Math.sin(phase) * 0.07;
+  disque(-0.2, b, 0.06, C.peau); disque(0.2, -b, 0.06, C.peau); ovale(0, 0, 0.2, 0.11, couleur); if (bassine) {
+    // La bassine sur la tête des vendeuses ambulantes
+    disque(0, -0.02, 0.19, C.bassine);
+    disque(-0.06, -0.05, 0.05, C.orange); disque(0.06, -0.03, 0.05, C.orange); disque(0, 0.05, 0.05, C.orange);
+  } else disque(0, -0.01, 0.085, C.peau); ctx.restore(); }
+
+function dessinerParasol(x, y, r, a) { const c1 = C.wax[Math.floor(a * 6) % 6], c2 = C.wax[Math.floor(a * 6 + 2) % 6];
+  disque(x + r * 0.2, y + r * 0.25, r, 'rgba(0,0,0,0.3)'); for (let i = 0; i < 8; i++) {
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.arc(x, y, r, i * Math.PI / 4, (i + 1) * Math.PI / 4); ctx.closePath();
+    ctx.fillStyle = i % 2 ? c1 : c2; ctx.fill(); } disque(x, y, r * 0.1, C.ombre); }
+
+function dessinerMonument(x, y, u) {
+  // Vu du ciel : le socle, la longue ombre qui dit la hauteur, et la silhouette sculptée
+  ctx.fillStyle = '#E9E3D6'; ctx.fillRect(x - 0.6 * u, y - 0.8 * u, 1.2 * u, 1.6 * u); ctx.fillStyle = 'rgba(0,0,0,0.28)';
+  ctx.beginPath(); ctx.moveTo(x + 0.2 * u, y - 0.6 * u); ctx.lineTo(x + 1.2 * u, y + 0.1 * u);
+  ctx.lineTo(x + 1.2 * u, y + 1.1 * u); ctx.lineTo(x + 0.2 * u, y + 0.6 * u); ctx.fill();
+  rectArrondi(x - 0.2 * u, y - 0.6 * u, 0.4 * u, 1.2 * u, 0.05 * u, '#FAF7F0'); disque(x, y - 0.32 * u, 0.07 * u, '#A39C8E');
+  rectArrondi(x - 0.07 * u, y - 0.24 * u, 0.14 * u, 0.55 * u, 0.04 * u, '#A39C8E'); }
+
+function dessinerFontaine(x, y, u) { disque(x, y, 0.42 * u, '#B8AF9E'); disque(x, y, 0.34 * u, '#2F93BF');
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = Math.max(1, u * 0.02);
+  ctx.beginPath(); ctx.arc(x, y, ((horloge * 0.15) % 0.3) * u + 0.03 * u, 0, Math.PI * 2); ctx.stroke();
+  disque(x, y, 0.06 * u, C.texte); }
+
+function dessinerElement(type, cx, y, h, L, r, col, k) { const u = ecran.u; if (type === 'tole') {
+    if (r < 0.15) { dessinerPalmier(cx, y + h * 0.5, u); return; }
+    const w = L * 0.86, hh = h * (0.55 + r * 0.3), x = cx - w / 2, yy = y + h * 0.1;
+    ctx.fillStyle = r < 0.55 ? C.toleGrise : C.toleRouille; ctx.fillRect(x, yy, w, hh);
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = Math.max(1, u * 0.02);
+    for (let i = 1; i < 7; i++) trait(x + w * i / 7, yy, x + w * i / 7, yy + hh);
+    if (r > 0.7) disque(x + w * 0.72, yy + hh * 0.25, 0.14 * u, C.cuve); } else if (type === 'immeubles') {
+    const w = L * 0.9, hh = h * 0.8, x = cx - w / 2, yy = y + h * 0.1;
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(x + 0.14 * u, yy + 0.14 * u, w, hh);
+    ctx.fillStyle = C.beton; ctx.fillRect(x, yy, w, hh);
+    ctx.strokeStyle = '#6E6A64'; ctx.lineWidth = 0.06 * u; ctx.strokeRect(x + 0.05 * u, yy + 0.05 * u, w - 0.1 * u, hh - 0.1 * u);
+    // Les cuves noires sur les toits : un détail de toutes les villes du golfe de Guinée
+    disque(x + w * 0.3, yy + hh * 0.28, 0.16 * u, C.cuve);
+    if (r > 0.4) disque(x + w * 0.66, yy + hh * 0.28, 0.16 * u, C.cuve);
+    ctx.fillStyle = '#B9B5AE'; ctx.fillRect(x + w * 0.2, yy + hh * 0.66, 0.3 * u, 0.2 * u); } else if (type === 'ocean') {
+    if (col === 0) { ctx.fillStyle = C.sable; ctx.fillRect(cx - L / 2, y, L, h + 1);
+      if (r < 0.5) dessinerPalmier(cx, y + h * (0.25 + r), u); else if (r < 0.8) {
+        // Pirogue de pêcheur tirée sur la plage
+        ctx.save(); ctx.translate(cx, y + h * 0.5); ctx.rotate(0.3);
+        ovale(0, 0, 0.16 * u, 0.7 * u, C.wax[Math.floor(r * 12) % 6]); ovale(0, 0, 0.09 * u, 0.55 * u, '#5A3A22');
+        ctx.restore(); } } else { ctx.strokeStyle = C.vague; ctx.lineWidth = Math.max(1.5, u * 0.03);
+      for (let j = 0; j < 3; j++) { const yy = y + h * (j + 0.5) / 3 + Math.sin(horloge * 1.5 + j + col) * 0.1 * u;
+        ctx.beginPath(); ctx.moveTo(cx - L * 0.35, yy); ctx.quadraticCurveTo(cx, yy - 0.15 * u, cx + L * 0.35, yy); ctx.stroke();
+      } } } else if (type === 'marche') { for (let j = 0; j < 2; j++) {
+      const rr = alea(r * 91 + j), py = y + h * (0.28 + j * 0.46);
+      dessinerParasol(cx + (rr - 0.5) * L * 0.3, py, 0.36 * u, rr);
+      if (rr < 0.6) dessinerPersonne(cx + L * 0.3 * (rr < 0.3 ? -1 : 1), py + 0.35 * u, u * 0.8, C.wax[Math.floor(rr * 10) % 6], true, horloge * 4 + rr * 10);
+    } } else if (type === 'monument') { if (col === 0 && ((k % 4) + 4) % 4 === 0) dessinerMonument(cx, y + h * 0.5, u);
+    else if (r < 0.45) dessinerFontaine(cx, y + h * 0.5, u); else dessinerPalmier(cx, y + h * (0.3 + r * 0.4), u); } }
+
+function dessinerDecor() {
+  const { u, routeX, W, H, hMonde } = ecran, n = CONFIG.voies, P = CONFIG.decor.periode, L = CONFIG.decor.colonne * u;
+  const acc = 0.3 * u, routeW = n * u, rd = routeX + routeW, d = jeu.defilement;
+  const k0 = Math.floor((d - hMonde) / P) - 1, k1 = Math.ceil(d / P); ctx.fillStyle = C.fond; ctx.fillRect(0, 0, W, H);
+  for (let k = k0; k <= k1; k++) { const q = CONFIG.quartiers[zoneA(k * P)], y = (d - (k + 1) * P) * u, h = P * u;
+    for (let cote = 0; cote < 2; cote++) {
+      const type = q.cotes[cote], bord = cote ? rd + acc : routeX - acc, dispo = cote ? W - bord : bord;
+      ctx.fillStyle = SOLS[type]; ctx.fillRect(cote ? bord : 0, y, dispo, h + 1); for (let col = 0; col * L < dispo; col++) {
+        dessinerElement(type, bord + (cote ? 1 : -1) * (col + 0.5) * L, y, h, L, alea(k * 13.7 + col * 7.1 + cote * 3.3), col, k);
+      } } } ctx.fillStyle = C.terre; ctx.fillRect(routeX - acc, 0, acc, H); ctx.fillRect(rd, 0, acc, H);
+  ctx.fillStyle = C.route; ctx.fillRect(routeX, 0, routeW, H); ctx.fillStyle = C.marquage;
+  ctx.fillRect(routeX + 0.05 * u, 0, 0.045 * u, H); ctx.fillRect(rd - 0.095 * u, 0, 0.045 * u, H);
+  for (let k = Math.floor((d - hMonde) / 1.4) - 1; k <= Math.ceil((d + 1) / 1.4); k++) {
+    for (let v = 1; v < n; v++) ctx.fillRect(routeX + v * u - 0.025 * u, (d - k * 1.4) * u, 0.05 * u, 0.7 * u); }
+  // Passants sur les bas-côtés : la ville vit autour du joueur
+  for (let k = k0; k <= k1; k++) { for (let cote = 0; cote < 2; cote++) { const r = alea(k * 5.3 + cote * 1.7);
+      if (r > 0.55) continue; const sens = r < 0.27 ? 1 : -1;
+      const yy = (d - (k + 1) * P) * u + ((((horloge * 0.4 * sens + r * 9) % P) + P) % P) * u;
+      dessinerPersonne(cote ? rd + acc / 2 : routeX - acc / 2, yy, u * 0.7, C.wax[Math.floor(r * 20) % 6], r < 0.15, horloge * 5 + r * 20);
+    } }
+  // Traînées de vitesse : on sent l'accélération sans lire de compteur
+  const v = etat === 'jeu' ? vitesseActuelle() : 0; if (v > 7) {
+    ctx.fillStyle = `rgba(255,255,255,${Math.min(0.35, (v - 7) / 14)})`; for (let i = 0; i < 8; i++) {
+      ctx.fillRect(routeX + (0.15 + alea(i) * (n - 0.3)) * u, ((d * 1.6 + i * 2.3) % (hMonde + 2) - 1) * u, 2, 1.2 * u); } }
+}
+
+function dessinerPortiques() { const { u, routeX } = ecran, rw = CONFIG.voies * u; for (const p of jeu.portiques) {
+    const y = (jeu.defilement - p.w) * u; if (y < -u || y > ecran.H + u) continue;
+    ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(routeX - 0.1 * u, y + 0.12 * u, rw + 0.4 * u, 0.45 * u);
+    ctx.fillStyle = '#2B2B2B';
+    ctx.fillRect(routeX - 0.34 * u, y - 0.08 * u, 0.16 * u, 0.16 * u); ctx.fillRect(routeX + rw + 0.18 * u, y - 0.08 * u, 0.16 * u, 0.16 * u);
+    ctx.fillRect(routeX - 0.3 * u, y - 0.04 * u, rw + 0.6 * u, 0.08 * u);
+    rectArrondi(routeX + 0.08 * u, y - 0.26 * u, rw - 0.16 * u, 0.52 * u, 0.06 * u, C.panneau);
+    ctx.strokeStyle = C.texte; ctx.lineWidth = 2;
+    cheminArrondi(routeX + 0.13 * u, y - 0.21 * u, rw - 0.26 * u, 0.42 * u, 0.04 * u); ctx.stroke();
+    texte(p.nom, routeX + rw / 2, y + 1, tailleAjustee(p.nom, 0.25 * u, rw - 0.5 * u, 800), C.texte, 800, 0); } }
+
+// ---------- Dessin des obstacles et du joueur ----------
+function dessinerTrou(o) { const u = ecran.u, rx = o.w / 2, ry = o.h / 2;
+  ctx.save(); ctx.translate(ecran.routeX + (o.voie + 0.5) * u, (o.y + o.h / 2) * u); ctx.scale(u, u);
+  if (o.touche) ctx.globalAlpha = 0.5; const forme = (f, couleur) => { ctx.beginPath(); o.forme.forEach((r, i) => {
+      const a = i / o.forme.length * Math.PI * 2, px = Math.cos(a) * rx * r * f, py = Math.sin(a) * ry * r * f;
+      if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py); }); ctx.closePath(); ctx.fillStyle = couleur; ctx.fill(); };
+  forme(1.15, C.bordTrou); forme(1, C.trou); ovale(-rx * 0.2, -ry * 0.15, rx * 0.38, ry * 0.18, 'rgba(140,165,175,0.28)');
+  ctx.restore(); }
+
+function dessinerVoiture(o) { const u = ecran.u, w = o.w, h = o.h, x = -w / 2;
+  ctx.save(); ctx.translate(ecran.routeX + (o.voie + 0.5) * u, o.y * u); ctx.scale(u, u);
+  if (o.touche) ctx.globalAlpha = 0.55; rectArrondi(x + 0.06, 0.08, w, h, 0.12, 'rgba(0,0,0,0.35)');
+  ctx.fillStyle = o.couleur; ctx.fillRect(x - 0.05, 0.27 * h, 0.06, 0.07); ctx.fillRect(x + w - 0.01, 0.27 * h, 0.06, 0.07);
+  rectArrondi(x, 0, w, h, 0.12, o.couleur); rectArrondi(x + 0.07, 0.19 * h, w - 0.14, 0.15 * h, 0.05, C.vitre);
+  rectArrondi(x + 0.08, 0.36 * h, w - 0.16, 0.33 * h, 0.04, 'rgba(0,0,0,0.14)');
+  rectArrondi(x + 0.09, 0.72 * h, w - 0.18, 0.1 * h, 0.04, C.vitre); if (o.bouchon) {
+    // Feux de freinage allumés : on reconnaît l'embouteillage de loin
+    const a = 0.25 + 0.15 * Math.sin(horloge * 8);
+    disque(x + 0.11, h - 0.04, 0.17, `rgba(255,59,47,${a})`); disque(x + w - 0.11, h - 0.04, 0.17, `rgba(255,59,47,${a})`); }
+  const feu = o.bouchon ? '#FF3B2F' : '#8E1C16';
+  rectArrondi(x + 0.04, h - 0.07, 0.14, 0.05, 0.02, feu); rectArrondi(x + w - 0.18, h - 0.07, 0.14, 0.05, 0.02, feu);
+  rectArrondi(x + 0.05, 0.02, 0.12, 0.05, 0.02, '#FFF3C4'); rectArrondi(x + w - 0.17, 0.02, 0.12, 0.05, 0.02, '#FFF3C4');
+  ctx.restore(); }
+
+function dessinerPiece(o) {
+  const u = ecran.u, cx = ecran.routeX + (o.voie + 0.5) * u, cy = (o.y + o.h / 2) * u, r = o.w / 2 * u;
+  ctx.save(); ctx.translate(cx, cy); disque(r * 0.15, r * 0.25, r, 'rgba(0,0,0,0.3)');
+  ctx.scale(0.25 + 0.75 * Math.abs(Math.cos(horloge * 3 + o.voie)), 1); // la pièce tourne sur elle-même
+  disque(0, 0, r, C.bordPiece); disque(0, 0, r * 0.8, C.piece); texte('100', 0, 1, r * 0.7, C.bordPiece, 900, 0);
+  ctx.restore(); }
+
+// Assiette d'ayimolou vue du dessus : riz aux haricots, sauce tomate, piment noir, poisson frit, wagashi
+function dessinerAssiette(cx, cy, r) { disque(cx + r * 0.12, cy + r * 0.18, r, 'rgba(0,0,0,0.35)');
+  disque(cx, cy, r, C.bordAssiette); disque(cx, cy, r * 0.9, C.texte); disque(cx - r * 0.12, cy + r * 0.05, r * 0.62, C.riz);
+  for (let i = 0; i < 26; i++) { const a = alea(i * 3.1) * Math.PI * 2, d = Math.sqrt(alea(i * 5.7)) * r * 0.55;
+    ovale(cx - r * 0.12 + Math.cos(a) * d, cy + r * 0.05 + Math.sin(a) * d, r * 0.05, r * 0.035, C.haricot); }
+  ovale(cx + r * 0.38, cy - r * 0.2, r * 0.27, r * 0.22, C.sauce); disque(cx + r * 0.3, cy - r * 0.27, r * 0.05, '#F07A3A');
+  disque(cx + r * 0.44, cy + r * 0.2, r * 0.14, C.piment);
+  ctx.save(); ctx.translate(cx - r * 0.1, cy - r * 0.48); ctx.rotate(-0.25); ovale(0, 0, r * 0.3, r * 0.1, C.poisson);
+  ctx.beginPath(); ctx.moveTo(r * 0.28, 0); ctx.lineTo(r * 0.42, -r * 0.09); ctx.lineTo(r * 0.42, r * 0.09); ctx.closePath(); ctx.fillStyle = C.poisson; ctx.fill();
+  disque(-r * 0.2, -r * 0.02, r * 0.025, C.ombre); ctx.restore();
+  rectArrondi(cx + r * 0.08, cy + r * 0.3, r * 0.24, r * 0.2, r * 0.04, C.wagashi);
+  ctx.fillStyle = '#C9472A'; ctx.fillRect(cx + r * 0.08, cy + r * 0.46, r * 0.24, r * 0.04); }
+
+function dessinerAyimolou(o) {
+  const u = ecran.u, cx = ecran.routeX + (o.voie + 0.5) * u, cy = (o.y + o.h / 2) * u, r = o.w / 2 * u;
+  const pulse = 1 + 0.08 * Math.sin(horloge * 7); ctx.strokeStyle = C.vert; ctx.lineWidth = Math.max(3, u * 0.05);
+  ctx.globalAlpha = 0.6 + 0.4 * Math.sin(horloge * 7);
+  ctx.beginPath(); ctx.arc(cx, cy, r * 1.25 * pulse, 0, Math.PI * 2); ctx.stroke(); ctx.globalAlpha = 1;
+  dessinerAssiette(cx, cy, r * pulse); texte('+1 VIE', cx, cy - r * 1.55, clamp(u * 0.2, 13, 22), C.vert, 900, 5); }
+
+function dessinerZem(cx, cy, u, angle) { ctx.save(); ctx.translate(cx, cy); ctx.rotate(angle); ctx.scale(u, u);
+  ctx.fillStyle = 'rgba(255,240,170,0.13)';
+  ctx.beginPath(); ctx.moveTo(-0.05, -0.45); ctx.lineTo(-0.32, -1.3); ctx.lineTo(0.32, -1.3); ctx.lineTo(0.05, -0.45); ctx.fill();
+  ovale(0.07, 0.06, 0.27, 0.5, 'rgba(0,0,0,0.35)'); rectArrondi(-0.065, 0.22, 0.13, 0.28, 0.05, '#111');
+  rectArrondi(-0.06, -0.52, 0.12, 0.24, 0.05, '#111'); rectArrondi(-0.1, -0.4, 0.2, 0.76, 0.08, C.rouge);
+  rectArrondi(-0.08, 0.26, 0.16, 0.14, 0.03, '#2A2A2A'); disque(0, -0.41, 0.05, '#FFF4C2');
+  ctx.strokeStyle = '#D0D0D0'; ctx.lineWidth = 0.04; ctx.lineCap = 'round'; trait(-0.27, -0.27, 0.27, -0.27);
+  // Le passager à l'arrière : c'est ce qui fait un zémidjan
+  ovale(0, 0.16, 0.2, 0.11, C.wax[3]); disque(0, 0.14, 0.085, C.peau); ctx.strokeStyle = C.jaune; ctx.lineWidth = 0.07;
+  trait(-0.17, -0.06, -0.25, -0.26); trait(0.17, -0.06, 0.25, -0.26); ovale(0, -0.04, 0.23, 0.13, C.jaune);
+  disque(0, -0.07, 0.105, '#1E1E1E'); ctx.fillStyle = C.vert; ctx.fillRect(-0.02, -0.17, 0.04, 0.2); ctx.restore(); }
+
+function dessinerParticules() { for (const p of jeu.particules) { const a = clamp(p.vie / p.vieMax, 0, 1);
+    ctx.globalAlpha = p.forme === 'fumee' ? a * 0.4 : a;
+    if (p.forme === 'texte') texte(p.texte, p.x, p.y, clamp(ecran.u * 0.26, 18, 34), p.couleur, 900, 6);
+    else if (p.forme === 'fumee') disque(p.x, p.y, p.taille, p.couleur);
+    else if (p.forme === 'onde') { ctx.strokeStyle = p.couleur; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(p.x, p.y, p.taille, 0, Math.PI * 2); ctx.stroke(); }
+    else if (p.forme === 'confetti') { ctx.fillStyle = p.couleur; ctx.fillRect(p.x, p.y, p.taille, p.taille * 0.6 * Math.abs(Math.cos(p.rot))); }
+    else { ctx.fillStyle = p.couleur; ctx.fillRect(p.x - p.taille / 2, p.y - p.taille / 2, p.taille, p.taille); } }
+  ctx.globalAlpha = 1; }
+
+// ---------- Interface ----------
+function dessinerCasque(x, y, r, plein) {
+  ctx.beginPath(); ctx.arc(x, y, r, Math.PI, 0); ctx.lineTo(x + r, y + r * 0.45); ctx.lineTo(x - r, y + r * 0.45); ctx.closePath();
+  if (plein) { ctx.lineWidth = 4; ctx.strokeStyle = C.ombre; ctx.stroke(); ctx.fillStyle = C.jaune; ctx.fill();
+    ctx.fillStyle = C.ombre; ctx.fillRect(x - r * 0.15, y - r * 0.05, r * 1.1, r * 0.32);
+  } else { ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.stroke(); } }
+
+function dessinerBouton(b, icone) { rectArrondi(b.x, b.y, b.w, b.h, 12, 'rgba(18,17,16,0.7)');
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 2; cheminArrondi(b.x, b.y, b.w, b.h, 12); ctx.stroke();
+  const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+  ctx.fillStyle = C.texte; ctx.strokeStyle = C.texte; ctx.lineWidth = 3; ctx.lineCap = 'round';
+  if (icone === 'pause') { ctx.fillRect(cx - 9, cy - 11, 6, 22); ctx.fillRect(cx + 3, cy - 11, 6, 22); return; }
+  if (icone === 'lecture') { ctx.beginPath(); ctx.moveTo(cx - 7, cy - 12); ctx.lineTo(cx + 11, cy); ctx.lineTo(cx - 7, cy + 12); ctx.closePath(); ctx.fill(); return; }
+  ctx.beginPath(); ctx.moveTo(cx - 13, cy - 5); ctx.lineTo(cx - 7, cy - 5); ctx.lineTo(cx, cy - 12);
+  ctx.lineTo(cx, cy + 12); ctx.lineTo(cx - 7, cy + 5); ctx.lineTo(cx - 13, cy + 5); ctx.closePath(); ctx.fill();
+  if (son.coupe) { trait(cx + 5, cy - 6, cx + 13, cy + 6); trait(cx + 13, cy - 6, cx + 5, cy + 6); }
+  else { ctx.beginPath(); ctx.arc(cx + 2, cy, 6, -0.9, 0.9); ctx.stroke(); ctx.beginPath(); ctx.arc(cx + 2, cy, 11, -0.9, 0.9); ctx.stroke(); }
+}
+
+function dessinerHUD() { const cx = ecran.W / 2, top = ecran.haut + 10, t = clamp(Math.min(ecran.W, ecran.H) * 0.11, 42, 96);
+  texte(String(Math.floor(jeu.score)), cx, top + t * 0.55, t, C.texte, 900, t * 0.16);
+  const r = clamp(t * 0.2, 10, 18), esp = r * 2.9, y = top + t * 1.25 + r * 0.5;
+  for (let i = 0; i < CONFIG.joueur.vies; i++) {
+    // Le casque regagné grossit puis revient : le gain de vie se voit d'un coup d'oeil
+    const s = i === jeu.vieGagnee ? 1 + jeu.animVie * 0.9 * Math.abs(Math.sin(jeu.animVie * 9)) : 1;
+    dessinerCasque(cx + (i - (CONFIG.joueur.vies - 1) / 2) * esp, y, r * s, i < jeu.vies); }
+  texte('Niveau ' + jeu.niveau, cx, y + r + 18, clamp(t * 0.3, 15, 26), C.jaune, 800, 5);
+  if (jeu.combo > 1 && jeu.temps - jeu.dernierBonus <= CONFIG.score.dureeCombo) {
+    texte('Combo x' + jeu.combo, cx, y + r + 46, clamp(t * 0.3, 15, 26), C.vert, 900, 5); }
+  dessinerBouton(boutons.pause, etat === 'pause' ? 'lecture' : 'pause'); }
+
+function voile(a) { ctx.fillStyle = `rgba(18,17,16,${a})`; ctx.fillRect(0, 0, ecran.W, ecran.H); }
+
+function drapeau(cx, y, w, h) {
+  [C.vert, C.jaune, C.rouge].forEach((col, i) => { ctx.fillStyle = col; ctx.fillRect(cx - w / 2 + i * w / 3, y, w / 3, h); });
+}
+
+function dessinerTitre() { const { W, H } = ecran; voile(0.5);
+  const ts = tailleAjustee('ZEM RUSH', Math.min(W, H) * 0.24, W * 0.88, 900), yT = H * 0.27;
+  texte('ZEM RUSH', W / 2, yT, ts, C.jaune, 900, ts * 0.12); const bh = Math.max(6, ts * 0.07), by = yT + ts * 0.62;
+  drapeau(W / 2, by, Math.min(W * 0.6, ts * 3), bh);
+  const l1 = 'Gauche ou droite pour changer de voie', l2 = 'Évite trous, bouchons et passants. Prends les pièces.';
+  const ti = Math.min(tailleAjustee(l1, 26, W * 0.88, 700), tailleAjustee(l2, 26, W * 0.88, 700));
+  texte(l1, W / 2, by + bh + ti * 1.5, ti, C.texte, 700, 5); texte(l2, W / 2, by + bh + ti * 2.9, ti, C.texte, 700, 5);
+  ctx.globalAlpha = 0.55 + 0.45 * Math.sin(horloge * 5);
+  texte('Toucher pour jouer', W / 2, H * 0.57, clamp(Math.min(W, H) * 0.07, 24, 44), C.texte, 900, 6); ctx.globalAlpha = 1;
+  // Légende du bonus dès l'écran titre
+  const ra = clamp(Math.min(W, H) * 0.06, 24, 44), ya = H * 0.67, la = 'Ayimolou : +1 vie';
+  const ta = clamp(ra * 0.75, 18, 30); ctx.font = `900 ${ta}px ${POLICE}`;
+  const lw = ctx.measureText(la).width, x0 = W / 2 - (lw + ra * 2.4) / 2; dessinerAssiette(x0 + ra, ya, ra);
+  texte(la, x0 + ra * 2.4 + lw / 2, ya, ta, C.vert, 900, 5);
+  if (ecran.clavier) texte('Flèches ou Q D, Haut pour klaxonner, Espace pause, M son', W / 2, H * 0.77, tailleAjustee('Flèches ou Q D, Haut pour klaxonner, Espace pause, M son', 18, W * 0.9, 700), C.jaune, 700, 4);
+  texte('Équipe Gwin', W / 2, H - ecran.bas - 22, 16, C.texte, 700, 4); }
+
+function dessinerPause() { const { W, H } = ecran; voile(0.6);
+  texte('Pause', W / 2, H * 0.36, clamp(Math.min(W, H) * 0.16, 48, 120), C.jaune, 900, 10);
+  texte('Toucher pour reprendre', W / 2, H * 0.48, clamp(Math.min(W, H) * 0.05, 18, 32), C.texte, 700, 5);
+  if (!ecran.clavier) return;
+  ['Flèches ou Q D : changer de voie', 'Haut ou K : klaxon', 'Espace : pause', 'R : recommencer', 'N : niveau suivant', 'M : son']
+    .forEach((l, i) => texte(l, W / 2, H * 0.57 + i * 28, 18, C.texte, 700, 4)); }
+
+function dessinerFin() { const { W, H } = ecran, m = Math.min(W, H), b = boutons.rejouer; voile(0.74);
+  const tg = tailleAjustee('GAME OVER', Math.min(m * 0.15, H * 0.1), W * 0.9, 900);
+  texte('GAME OVER', W / 2, H * 0.11, tg, C.rouge, 900, tg * 0.12);
+  drapeau(W / 2, H * 0.11 + tg * 0.6, Math.min(W * 0.5, tg * 4), 6);
+  texte('SCORE', W / 2, H * 0.22, clamp(m * 0.04, 15, 24), C.texte, 800, 4); const ts = Math.min(m * 0.2, H * 0.11);
+  texte(String(Math.floor(jeu.score)), W / 2, H * 0.29, ts, C.texte, 900, ts * 0.1);
+  const tl = clamp(m * 0.04, 15, 24), tv = Math.min(m * 0.1, H * 0.06); if (jeu.nouveauRecord) {
+    const s = 1 + 0.06 * Math.sin(horloge * 6);
+    texte('NOUVEAU RECORD', W / 2, H * 0.4, tailleAjustee('NOUVEAU RECORD', tv * s, W * 0.9, 900), C.jaune, 900, 6); } else {
+    texte('MEILLEUR SCORE', W / 2, H * 0.38, tl, C.texte, 800, 4);
+    texte(String(Math.floor(meilleurScore)), W / 2, H * 0.43, tv, C.jaune, 900, 6); }
+  const stats = `${Math.floor(jeu.temps)} s, ${quartierActuel().nom}, ${jeu.pieces} pièces, ${jeu.ayimolous} ayimolou`;
+  texte(stats, W / 2, H * 0.52, tailleAjustee(stats, tl, W * 0.9, 700), C.texte, 700, 4);
+  // Le bouton apparaît quand il devient actif, pour qu'on ne tape pas dans le vide
+  const a = clamp((jeu.tempsFin - 0.2) * 5, 0, 1), s = 1 + 0.03 * Math.sin(horloge * 5) * a; ctx.globalAlpha = a;
+  ctx.save(); ctx.translate(W / 2, b.y + b.h / 2); ctx.scale(s, s);
+  rectArrondi(-b.w / 2 + 5, -b.h / 2 + 7, b.w, b.h, 20, C.ombre); rectArrondi(-b.w / 2, -b.h / 2, b.w, b.h, 20, C.jaune);
+  const tb = Math.min(b.h * 0.42, 40); ctx.font = `900 ${tb}px ${POLICE}`;
+  const lt = ctx.measureText('REJOUER').width, ix = -lt / 2 - tb * 0.35; texte('REJOUER', tb * 0.45, 1, tb, C.ombre, 900, 0);
+  // Icône de relance dessinée : une flèche circulaire
+  ctx.strokeStyle = C.ombre; ctx.lineWidth = tb * 0.16; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(ix, 0, tb * 0.36, -Math.PI * 0.35, Math.PI * 1.35); ctx.stroke();
+  const ax = ix + Math.cos(-Math.PI * 0.35) * tb * 0.36, ay = Math.sin(-Math.PI * 0.35) * tb * 0.36;
+  ctx.fillStyle = C.ombre; ctx.beginPath();
+  ctx.moveTo(ax + tb * 0.2, ay - tb * 0.05); ctx.lineTo(ax - tb * 0.12, ay - tb * 0.22); ctx.lineTo(ax - tb * 0.02, ay + tb * 0.18); ctx.closePath(); ctx.fill();
+  ctx.restore(); if (ecran.clavier) texte('Entrée ou R pour rejouer', W / 2, b.y + b.h + 30, 18, C.texte, 700, 4);
+  ctx.globalAlpha = 1; }
+
+function dessiner() { const { W, H, u } = ecran; ctx.save();
+  if (jeu.secousse > 0.3) ctx.translate(hasard(-1, 1) * jeu.secousse, hasard(-1, 1) * jeu.secousse); dessinerDecor();
+  for (const o of jeu.obstacles) if (o.type === 'trou') dessinerTrou(o);
+  for (const o of jeu.obstacles) if (o.type === 'piece' && !o.touche) dessinerPiece(o);
+  for (const o of jeu.obstacles) if (o.type === 'ayimolou' && !o.touche) dessinerAyimolou(o);
+  for (const o of jeu.obstacles) if (o.type === 'voiture') dessinerVoiture(o); for (const o of jeu.obstacles) {
+    if (o.type === 'pieton') { const p = versEcran(o.x, o.y + 0.2); dessinerPersonne(p.x, p.y, u * 0.95, o.couleur, o.bassine, o.phase); }
+  } const clignote = jeu.invincible > 0 && Math.floor(horloge * 14) % 2 === 0;
+  if (!clignote && etat !== 'fin') { const p = versEcran(jeu.xJoueur, yJoueur()); dessinerZem(p.x, p.y, u, jeu.inclinaison); }
+  dessinerPortiques(); dessinerParticules(); ctx.restore();
+
+  if (jeu.flash > 0) { ctx.fillStyle = `rgba(255,75,58,${jeu.flash * 0.55})`; ctx.fillRect(0, 0, W, H); }
+  if (jeu.flashVert > 0) { ctx.fillStyle = `rgba(34,178,99,${jeu.flashVert * 0.45})`; ctx.fillRect(0, 0, W, H); }
+  if (etat === 'jeu' || etat === 'pause') dessinerHUD(); if (etat === 'jeu' && jeu.banniere) {
+    const bn = jeu.banniere, tb = tailleAjustee(bn.texte, clamp(Math.min(W, H) * 0.11, 36, 96), W * 0.9, 900);
+    ctx.globalAlpha = clamp(bn.t / 0.4, 0, 1); texte(bn.texte, W / 2, H * 0.38, tb, bn.couleur, 900, tb * 0.14);
+    if (bn.sous) texte(bn.sous, W / 2, H * 0.38 + tb * 0.85, clamp(tb * 0.38, 16, 32), C.jaune, 800, 5); ctx.globalAlpha = 1;
+  } if (etat === 'titre') dessinerTitre(); else if (etat === 'pause') dessinerPause();
+  else if (etat === 'fin') { dessinerFin(); dessinerParticules(); } dessinerBouton(boutons.son, 'son'); }
+
+// ---------- Boucle ----------
+let dernier = performance.now(), cumul = 0;
+function boucle(t) {
+  // Pas de temps fixe : la vitesse du jeu ne dépend pas de la fréquence de l'écran
+  cumul += Math.min(0.1, (t - dernier) / 1000); dernier = t;
+  while (cumul >= CONFIG.pasTemps) { mettreAJour(CONFIG.pasTemps); cumul -= CONFIG.pasTemps; } majAudio(); dessiner();
+  requestAnimationFrame(boucle); }
+
+window.addEventListener('resize', redimensionner); window.addEventListener('keydown', surTouche);
+window.addEventListener('blur', mettrePause); canvas.addEventListener('pointerdown', surPointeur);
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('visibilitychange', () => { if (document.hidden) mettrePause(); }); redimensionner();
+requestAnimationFrame(boucle);
+</script>
 </body>
 </html>
